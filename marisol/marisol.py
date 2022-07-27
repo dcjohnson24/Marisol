@@ -13,8 +13,8 @@ import multiprocessing
 class Area(Enum):
     TOP_LEFT = 0
     TOP_RIGHT = 1
-    BOTTOM_RIGHT = 2
-    BOTTOM_LEFT = 3
+    BOTTOM_LEFT = 2
+    BOTTOM_RIGHT = 3
 
 
 class RedactionStyle(Enum):
@@ -29,7 +29,7 @@ class RedactionStyle(Enum):
 
 class Marisol(object):
 
-    def __init__(self, prefix, fill, start, area=Area.BOTTOM_RIGHT):
+    def __init__(self, prefix, fill, start, area=Area.BOTTOM_RIGHT, x=300, y=30, rotation=0, manual=True):
         """
         Marisol Base Class - A collection of documents to be bates numbered.
 
@@ -38,11 +38,19 @@ class Marisol(object):
             fill (int): Length for zero-filling
             start (int): Starting bates number
             area (Area): Area in which to place the bates number.
+            x (int): Horizontal position of text. Text moves to the right as x increases.
+            y (int): Vertical position of text. Text moves up as y increases.
+            rotation (int): angle of rotation of text.
+            manual (bool): whether to manually position text.
         """
         self.prefix = prefix
         self.fill = fill
         self.start = start
         self.area = area
+        self.x = x
+        self.y = y
+        self.rotation = rotation
+        self.manual = manual
 
         self.index = 0
         self.number = 0
@@ -76,7 +84,7 @@ class Marisol(object):
             (str, bool): The file name saved to and success or failure.
         """
         try:
-            filename = document.save(overwrite=self.overwrite)
+            filename = document.save(filename=document.savename, overwrite=self.overwrite)
         except FileExistsError:
             return "EXISTS", False
         else:
@@ -92,7 +100,8 @@ class Marisol(object):
         Returns:
             marisol.Marisol: The current Marisol instance.
         """
-        d = Document(file, self.prefix, self.fill, self.start+self.number, self.area)
+        d = Document(file, self.prefix, self.fill, self.start+self.number, self.area,
+                     self.x, self.y, self.rotation, self.manual)
         self.number += len(d)
         self.documents.append(d)
         return self
@@ -116,7 +125,7 @@ class Marisol(object):
 
 class Document(object):
 
-    def __init__(self, file, prefix, fill, start, area):
+    def __init__(self, file, prefix, fill, start, area, x=300, y=30, rotation=0, manual=True):
         """
         Represents a document to be numbered.
 
@@ -126,20 +135,31 @@ class Document(object):
             fill (int): Length to zero-pad number to.
             start (int): Number to start with.
             area (Area): Area on the document where the number should be drawn
+            x (int): Horizontal position of text. Text moves right as x increases
+            y (int): Vertical position of text. Text moves up as y increases
+            rotation (int): angle of rotation of text.
+            manual (bool): whether to manually position the text
         """
+        self.savename = os.path.splitext(os.path.basename(file))[0]
+        
         try:
             self.file = io.BytesIO(file.read())
         except AttributeError:
             with open(file, "rb") as file:
                 self.file = io.BytesIO(file.read())
+        
         self.reader = PdfFileReader(self.file)
         self.prefix = prefix
         self.fill = fill
         self.start = copy.copy(start)
         self.area = area
+        self.x = x
+        self.y = y
+        self.rotation = rotation
+        self.manual = manual
 
         self.overlays = {x: None for x in Area}
-        self.overlays[area] = BatesOverlay(None, self.area)
+        self.overlays[area] = BatesOverlay(None, self.area, x=self.x, y=self.y, rotation=self.rotation, manual=self.manual)
 
         self.index = 0
 
@@ -204,7 +224,10 @@ class Document(object):
         Raises:
             FileExistsError: When the file already exists and overwrite is not enabled.
         """
-        filename = filename or "{begin}.pdf".format(begin=self.begin)
+        if filename is None: 
+            filename = "{begin}.pdf".format(begin=self.begin)
+        else:
+            filename = self.savename + f"_{str(self.start).zfill(self.fill)}.pdf"
 
         if os.path.exists(filename) and not overwrite:
             raise FileExistsError("PDF file {} already exists and overwrite is disabled.".format(filename))
@@ -321,9 +344,13 @@ class Page(object):
 
 class GenericTextOverlay(object):
 
-    def __init__(self, text, area):
+    def __init__(self, text, area, x=300, y=30, rotation=0, manual=True):
         self.text = text
         self.area = area
+        self.x = x
+        self.y = y
+        self.rotation = rotation
+        self.manual = manual
 
     def apply(self, c):
         """
@@ -332,33 +359,42 @@ class GenericTextOverlay(object):
         Args:
              c (canvas.Canvas): canvas to apply the overlay to
         """
-        position_left, position_bottom = self.position(c)
-        c.drawString(position_left, position_bottom, self.text)
+        position_left, position_bottom = self.position(c, self.x, self.y, manual=self.manual)
+        c.saveState()
+        c.translate(position_left, position_bottom)
+        c.rotate(self.rotation)
+        c.drawCentredString(0, 0, self.text)
+        c.restoreState()
 
-    def position(self, c):
+    def position(self, c, x, y, h=15, manual=True):
         """
         Get the appropriate position on the page for the current text given an area.
 
         Args:
             c (canvas.Canvas): Page to get the positioning for
+            x (int): Horizontal position of text. Text moves right as x increases
+            y (int): Vertical position of text. Text moves up as y increases
+            h (int): units from bottom or top of page. Default is 15
 
         Returns:
             tuple: the position
         """
-        if self.area in [Area.TOP_LEFT, Area.TOP_RIGHT]:  # top
-            from_bottom = c._pagesize[1]-15  # 15 down from height of page
-        elif self.area in [Area.BOTTOM_LEFT, Area.BOTTOM_RIGHT]:  # bottom
-            from_bottom = 15  # 15 up from bottom of page
+        if manual:
+            return x, y #(300, 30) is roughly center 
+        else:
+            if self.area in [Area.BOTTOM_LEFT, Area.BOTTOM_RIGHT]:  # top
+                from_bottom = c._pagesize[1] - h  # 15 up from bottom of page
+            elif self.area in [Area.TOP_LEFT, Area.TOP_RIGHT]:  # bottom
+                from_bottom = h  # 15 down from top of page
 
-        if self.area in [Area.TOP_LEFT, Area.BOTTOM_LEFT]:  # left
-            from_left = 15
-        elif self.area in [Area.TOP_RIGHT, Area.BOTTOM_RIGHT]:  # right
-            offset = 15  # initial offset
-            offset += c.stringWidth(self.text)  # offset for text length
-            from_left = c._pagesize[0]-offset
-
-        return from_left, from_bottom
-
+            if self.area in [Area.TOP_LEFT, Area.BOTTOM_LEFT]:  # left
+                from_left = h
+            elif self.area in [Area.TOP_RIGHT, Area.BOTTOM_RIGHT]:  # right
+                offset = h  # initial offset
+                offset += c.stringWidth(self.text)  # offset for text length
+                from_left = c._pagesize[0]-offset
+            return 30, c._pagesize[0] - c.stringWidth(self.text) 
+        
 
 class BatesOverlay(GenericTextOverlay):
     pass
