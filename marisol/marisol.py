@@ -3,6 +3,7 @@ from enum import Enum
 from PyPDF2 import PdfFileReader, PdfFileWriter
 from reportlab.pdfgen import canvas
 from reportlab.lib import pagesizes
+from pathlib import Path
 
 import copy
 import io
@@ -29,7 +30,8 @@ class RedactionStyle(Enum):
 
 class Marisol(object):
 
-    def __init__(self, prefix, fill, start, area=Area.BOTTOM_RIGHT, x=300, y=30, rotation=0, manual=True):
+    def __init__(self, prefix, fill, start, area=Area.BOTTOM_RIGHT, x=300, y=30, rotation=0, manual=True,
+                 output_dir: str='.'):
         """
         Marisol Base Class - A collection of documents to be bates numbered.
 
@@ -42,6 +44,7 @@ class Marisol(object):
             y (int): Vertical position of text. Text moves up as y increases.
             rotation (int): angle of rotation of text.
             manual (bool): whether to manually position text.
+            output_dir (str): location to save the stamped documents.
         """
         self.prefix = prefix
         self.fill = fill
@@ -51,6 +54,7 @@ class Marisol(object):
         self.y = y
         self.rotation = rotation
         self.manual = manual
+        self.output_dir = output_dir
 
         self.index = 0
         self.number = 0
@@ -83,8 +87,9 @@ class Marisol(object):
         Returns:
             (str, bool): The file name saved to and success or failure.
         """
+        save_path = str(Path(self.output_dir) / document.savename)
         try:
-            filename = document.save(filename=document.savename, overwrite=self.overwrite)
+            filename = document.save(filename=save_path, overwrite=self.overwrite)
         except FileExistsError:
             return "EXISTS", False
         else:
@@ -227,7 +232,7 @@ class Document(object):
         if filename is None: 
             filename = "{begin}.pdf".format(begin=self.begin)
         else:
-            filename = self.savename + f"_{str(self.start).zfill(self.fill)}.pdf"
+            filename += f"_{str(self.start).zfill(self.fill)}.pdf"
 
         if os.path.exists(filename) and not overwrite:
             raise FileExistsError("PDF file {} already exists and overwrite is disabled.".format(filename))
